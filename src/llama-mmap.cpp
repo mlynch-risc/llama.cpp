@@ -4,6 +4,8 @@
 
 #include "ggml.h"
 
+#include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <climits>
 #include <cstdlib>
@@ -469,7 +471,13 @@ struct llama_mmap::impl {
     impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
         size = file->size();
         int fd = file->file_id();
-        int flags = MAP_SHARED;
+        void *addr2;
+        int flags = MAP_SHARED|MAP_ANONYMOUS|MAP_FILE|MAP_FIXED|MAP_PRIVATE|MAP_HUGETLB|MAP_HUGE_2MB;
+
+        addr2 = mmap(NULL, file->size(), PROT_NONE, MAP_ANONYMOUS|MAP_PRIVATE|MAP_HUGETLB, -1, 0);
+        if (addr2 == MAP_FAILED) {
+            throw std::runtime_error(format("first mmap failed: %s", strerror(errno)));
+        }
         if (numa) { prefetch = 0; }
 #ifdef __linux__
         if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
@@ -479,7 +487,7 @@ struct llama_mmap::impl {
         // MAP_POPULATE would fault in the lazy ranges too
         if (prefetch && lazy_ranges.empty()) { flags |= MAP_POPULATE; }
 #endif
-        addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
+        addr = mmap(addr2, file->size(), PROT_READ|PROT_WRITE, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }
@@ -528,6 +536,7 @@ struct llama_mmap::impl {
     }
 
     void unmap_fragment(size_t first, size_t last) {
+        //int page_size = 1024UL*1024UL*2UL;
         int page_size = sysconf(_SC_PAGESIZE);
         align_range(&first, &last, page_size);
         size_t len = last - first;
